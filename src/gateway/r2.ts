@@ -1,78 +1,89 @@
-import type { Sandbox } from '@cloudflare/sandbox';
-import type { MoltbotEnv } from '../types';
-import { R2_MOUNT_PATH, getR2BucketName } from '../config';
+/**
+ * Gateway management for Moltbot
+ */
+
+import { Sandbox } from '@cloudflare/sandbox';
+import type { MoltbotEnv } from './types';
+
+const MOLTBOT_PORT = 18789;
 
 /**
- * Check if R2 is already mounted by looking at the mount table
+ * Find existing Moltbot process
  */
-async function isR2Mounted(sandbox: Sandbox): Promise<boolean> {
+export async function findExistingMoltbotProcess(
+  sandbox: Sandbox,
+): Promise<{ pid: number; status: string } | null> {
   try {
-    const proc = await sandbox.startProcess(`mount | grep "s3fs on ${R2_MOUNT_PATH}"`);
-    // Wait for the command to complete
-    let attempts = 0;
-    while (proc.status === 'running' && attempts < 10) {
-      // eslint-disable-next-line no-await-in-loop -- intentional sequential polling
-      await new Promise((r) => setTimeout(r, 200));
-      attempts++;
-    }
-    const logs = await proc.getLogs();
-    // If stdout has content, the mount exists
-    const mounted = !!(logs.stdout && logs.stdout.includes('s3fs'));
-    console.log('isR2Mounted check:', mounted, 'stdout:', logs.stdout?.slice(0, 100));
-    return mounted;
-  } catch (err) {
-    console.log('isR2Mounted error:', err);
-    return false;
+    const processes = await sandbox.listProcesses();
+    const moltbotProcess = processes.find((p) =>
+      p.command?.includes('openclaw')
+    );
+    return moltbotProcess ? { pid: moltbotProcess.pid, status: moltbotProcess.status } : null;
+  } catch (error) {
+    console.error('[GATEWAY] Error listing processes:', error);
+    return null;
   }
 }
 
 /**
- * Mount R2 bucket for persistent storage
- *
- * @param sandbox - The sandbox instance
- * @param env - Worker environment bindings
- * @returns true if mounted successfully, false otherwise
+ * Ensure Moltbot gateway is running
  */
-export async function mountR2Storage(sandbox: Sandbox, env: MoltbotEnv): Promise<boolean> {
-  // Skip if R2 credentials are not configured
-  if (!env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.CF_ACCOUNT_ID) {
-    console.log(
-      'R2 storage not configured (missing R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, or CF_ACCOUNT_ID)',
-    );
-    return false;
+export async function ensureMoltbotGateway(
+  sandbox: Sandbox,
+  env: MoltbotEnv,
+): Promise<void> {
+  // MOUNT R2 STORAGE (SIMPLE FIX ADDED HERE)
+  if (env.MOLTBOT_BUCKET && env.R2_BUCKET_NAME) {
+    try {
+      console.log('[GATEWAY] Mounting R2 storage...');
+      await sandbox.exec('mkdir -p /data/moltbot && chmod 777 /data/moltbot');
+      await sandbox.mountBucket(env.MOLTBOT_BUCKET, '/data/moltbot', {
+        readOnly: false,
+      });
+      console.log('[GATEWAY] R2 storage mounted at /data/moltbot');
+    } catch (error) {
+      console.error('[GATEWAY] R2 mount failed (continuing without):', error);
+    }
   }
 
-  // Check if already mounted first - this avoids errors and is faster
-  if (await isR2Mounted(sandbox)) {
-    console.log('R2 bucket already mounted at', R2_MOUNT_PATH);
-    return true;
+  const existing = await findExistingMoltbotProcess(sandbox);
+  if (existing && existing.status === 'running') {
+    return;
   }
 
-  const bucketName = getR2BucketName(env);
+  console.log('[GATEWAY] Starting Moltbot gateway...');
+  
+  await sandbox.startProcess({
+    command: ['/usr/local/bin/start-openclaw.sh'],
+    env: {
+      ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY || '',
+      NODE_ENV: 'production',
+    },
+  });
+
+  console.log('[GATEWAY] Moltbot gateway started');
+}
+
+/**
+ * Sync data to R2 (simple version)
+ */
+export async function syncToR2(
+  sandbox: Sandbox,
+  env: MoltbotEnv,
+): Promise<{ success: boolean; error?: string }> {
   try {
-    console.log('Mounting R2 bucket', bucketName, 'at', R2_MOUNT_PATH);
-    await sandbox.mountBucket(bucketName, R2_MOUNT_PATH, {
-      endpoint: `https://${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      // Pass credentials explicitly since we use R2_* naming instead of AWS_*
-      credentials: {
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-      },
-    });
-    console.log('R2 bucket mounted successfully - moltbot data will persist across sessions');
-    return true;
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.log('R2 mount error:', errorMessage);
-
-    // Check again if it's mounted - the error might be misleading
-    if (await isR2Mounted(sandbox)) {
-      console.log('R2 bucket is mounted despite error');
-      return true;
+    if (!env.R2_BUCKET_NAME) {
+      return { success: false, error: 'R2_BUCKET_NAME not set' };
     }
 
-    // Don't fail if mounting fails - moltbot can still run without persistent storage
-    console.error('Failed to mount R2 bucket:', err);
-    return false;
+    const result = await sandbox.exec(
+      'rsync -av /root/.openclaw/ /data/moltbot/openclaw/ 2>&1'
+    );
+    
+    console.log('[SYNC] R2 sync completed:', result.stdout);
+    return { success: true };
+  } catch (error) {
+    console.error('[SYNC] R2 sync failed:', error);
+    return { success: false, error: String(error) };
   }
 }
