@@ -29,7 +29,9 @@ RUN npm install -g openclaw@2026.2.3 \
 # Legacy .clawdbot paths are kept for R2 backup migration
 RUN mkdir -p /root/.openclaw \
     && mkdir -p /root/clawd \
-    && mkdir -p /root/clawd/skills
+    && mkdir -p /root/clawd/skills \
+    && mkdir -p /data/moltbot \
+    && chmod 777 /data/moltbot  # ← ADDED THIS LINE
 
 # Copy startup script
 # Build cache bust: 2026-02-06-v29-sync-workspace
