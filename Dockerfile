@@ -1,8 +1,6 @@
 FROM docker.io/cloudflare/sandbox:0.7.0
 
 # Install Node.js 22 (required by OpenClaw) and rsync (for R2 backup sync)
-# The base image has Node 20, we need to replace it with Node 22
-# Using direct binary download for reliability
 ENV NODE_VERSION=22.13.1
 RUN ARCH="$(dpkg --print-architecture)" \
     && case "${ARCH}" in \
@@ -21,18 +19,17 @@ RUN ARCH="$(dpkg --print-architecture)" \
 RUN npm install -g pnpm
 
 # Install OpenClaw (formerly clawdbot/moltbot)
-# Pin to specific version for reproducible builds
 RUN npm install -g openclaw@2026.2.3 \
     && openclaw --version
 
 # Create OpenClaw directories
-# Legacy .clawdbot paths are kept for R2 backup migration
 RUN mkdir -p /root/.openclaw \
     && mkdir -p /root/clawd \
-    && mkdir -p /root/clawd/skills
+    && mkdir -p /root/clawd/skills \
+    && mkdir -p /data/moltbot \
+    && chmod 777 /data/moltbot
 
 # Copy startup script
-# Build cache bust: 2026-02-06-v29-sync-workspace
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 
