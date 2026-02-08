@@ -31,6 +31,9 @@ RUN mkdir -p /root/.openclaw \
     && mkdir -p /root/clawd \
     && mkdir -p /root/clawd/skills
 
+# CRITICAL FIX: Create R2 mount directory with proper permissions
+RUN mkdir -p /data/moltbot && chmod 777 /data/moltbot
+
 # Copy startup script
 # Build cache bust: 2026-02-06-v29-sync-workspace
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
