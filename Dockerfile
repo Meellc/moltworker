@@ -41,6 +41,7 @@ COPY skills/ /root/clawd/skills/
 
 # Set working directory
 WORKDIR /root/clawd
+RUN mkdir -p /data/moltbot && chmod 777 /data/moltbot
 
 # Expose the gateway port
 EXPOSE 18789
